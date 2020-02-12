@@ -1,0 +1,5 @@
+/.mapbox_token
+/data/146M_predictions_v2.arrow
+/data/146M_predictions_v2.arrow.gz
+/.idea
+/dask-worker-space/
