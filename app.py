@@ -743,7 +743,7 @@ def register_update_plots_callback(client, bounds):
         )
 
 
-if __name__ == '__main__':
+def publish_dataset_to_cluster():
     # Look for dataset
     dataset_url = 'https://s3.us-east-2.amazonaws.com/rapidsai-data/viz-data/146M_predictions_v2.arrow.gz'
 
@@ -764,7 +764,7 @@ if __name__ == '__main__':
         print("Decompressing...")
         with gzip.open(data_gz_path, 'rb') as f_in:
             with open(data_path, 'wb') as f_out:
-                 shutil.copyfileobj(f_in, f_out)
+                shutil.copyfileobj(f_in, f_out)
 
         print("Deleting compressed file...")
         os.remove(data_gz_path)
@@ -786,7 +786,12 @@ if __name__ == '__main__':
         # cudf DataFrame
         c_df_d = delayed(cudf.DataFrame.from_pandas)(pd_df_d).persist()
 
-        # Publish datasets to the clusetr
+        # Unpublish datasets if present
+        for ds_name in ['pd_df_d', 'c_df_d']:
+            if ds_name in client.datasets:
+                client.unpublish_dataset(ds_name)
+
+        # Publish datasets to the cluster
         client.publish_dataset(pd_df_d=pd_df_d)
         client.publish_dataset(c_df_d=c_df_d)
 
@@ -811,6 +816,17 @@ if __name__ == '__main__':
 
     # Register top-level callback that updates plots
     register_update_plots_callback(client, bounds)
+
+
+def server():
+    # gunicorn entry point when called with `gunicorn 'app:server()'`
+    publish_dataset_to_cluster()
+    return app.server
+
+
+if __name__ == '__main__':
+    # development entry point
+    publish_dataset_to_cluster()
 
     # Launch dashboard
     app.run_server(debug=False, dev_tools_silence_routes_logging=True)

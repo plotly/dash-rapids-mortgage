@@ -20,10 +20,17 @@ $ conda env create -f environment.yml
 $ conda activate_rapids_mortgage_dashboard
 ```
 
-Then launch the dashboard
+Then launch the dashboard for development
 ```
 $ python app.py
 ``` 
+
+Or, launch for production using gunicorn with:
+```
+$ gunicorn 'app:server()'
+```
+
+Note: A current limitation is that using multiple gunicorn workers will result in starting multiple Dask clusters.
 
 The first time the dashboard runs, it will download and decompress the mortgage dataset into the `./data` directory. This will consume ~3.4GB of disk space. 
 

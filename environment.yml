@@ -13,3 +13,4 @@ dependencies:
   - datashader=0.10
   - dask-cuda=0.12.0
   - dash-daq=0.3.2
+  - gunicorn=20.0

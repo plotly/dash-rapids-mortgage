@@ -3,3 +3,6 @@
 /data/146M_predictions_v2.arrow.gz
 /.idea
 /dask-worker-space/
+/*.lock
+/*.dirlock
+/scheduler-info.json
