@@ -479,7 +479,7 @@ def build_colorscale(colorscale_name, transform):
 
 
 def build_choropleth(
-        df, aggregate, aggregate_column, colorscale_name, colorscale_transform, clear_selection
+        df, aggregate, aggregate_column, colorscale_name, colorscale_transform, selected_zips
 ):
     """
     Build choropleth figure
@@ -515,6 +515,13 @@ def build_choropleth(
     # Build colorscale
     colorscale = build_colorscale(colorscale_name, colorscale_transform)
 
+    # Compute selected points
+    if selected_zips is None:
+        selectedpoints = None
+    else:
+        selected_mask = zip_aggregates.index.isin(selected_zips)
+        selectedpoints = np.nonzero(selected_mask)[0]
+
     # Build Figure
     fig = {
         "data": [{
@@ -524,6 +531,7 @@ def build_choropleth(
             "locations": zip_strs,
             "z": zip_aggregates.values,
             "colorscale": colorscale,
+            "selectedpoints": selectedpoints
         }],
         "layout": {
             "mapbox": {
@@ -539,9 +547,6 @@ def build_choropleth(
             'template': template,
         }
     }
-
-    if clear_selection:
-        fig['data'][0]['selectedpoints'] = False
 
     return fig
 
@@ -642,20 +647,24 @@ def build_updated_figures(
 
     array_module = cupy if isinstance(df, cudf.DataFrame) else np
 
-    # Build indicator figure
     all_hists_query = build_query(selected)
-    choropleth = build_choropleth(
-        df.query(all_hists_query) if all_hists_query else df, aggregate,
-        aggregate_column, colorscale_name, colorscale_transform, selected_map is None)
+
     if selected_map:
         selected_zips = array_module.array(
             [int(p['location']) for p in selected_map['points']])
     else:
         selected_zips = None
+
     if selected_zips is not None:
         df_map = df[array_module.isin(array_module.asarray(df['zip']), selected_zips)]
     else:
         df_map = df
+
+    choropleth = build_choropleth(
+        df.query(all_hists_query) if all_hists_query else df, aggregate,
+        aggregate_column, colorscale_name, colorscale_transform, selected_zips)
+
+    # Build indicator figure
     n_selected_indicator = {
         'data': [{
             'type': 'indicator',
