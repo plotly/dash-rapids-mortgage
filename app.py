@@ -65,6 +65,13 @@ float_columns = [
     'current_actual_upb', 'dti', 'borrower_credit_score', 'delinquency_12_prediction'
 ]
 
+column_labels = {
+    'delinquency_12_prediction': 'Risk Score',
+    'borrower_credit_score': 'Borrower Credit Score',
+    'current_actual_upb': 'Unpaid Balance',
+    'dti': 'Debt to Income Ratio',
+}
+
 
 def load_dataset(path):
     """
@@ -341,7 +348,6 @@ app.layout = html.Div(children=[
     ),
 ])
 
-
 # Register callbacks
 @app.callback(
     [Output('aggregate-col-dropdown', 'options'),
@@ -354,15 +360,7 @@ def update_agg_col_dropdown(agg):
                     'value': 'NA'}]
         disabled = True
     else:
-        options = [{'label': 'Risk Score',
-                    'value': 'delinquency_12_prediction'},
-                   {'label': 'Borrower Credit Score',
-                    'value': 'borrower_credit_score'},
-                   {'label': 'Unpaid Balance',
-                    'value': 'current_actual_upb'},
-                   {'label': 'Debt to Income Ratio',
-                    'value': 'dti'}
-                   ]
+        options = [{'label': v, 'value': k} for k, v in column_labels.items()]
         disabled = False
     return options, disabled
 
@@ -522,6 +520,12 @@ def build_choropleth(
         selected_mask = zip_aggregates.index.isin(selected_zips)
         selectedpoints = np.nonzero(selected_mask)[0]
 
+    if aggregate == "count":
+        colorbar_title = aggregate
+    else:
+        column_label = column_labels[aggregate_column]
+        colorbar_title = f"{aggregate}({column_label})"
+
     # Build Figure
     fig = {
         "data": [{
@@ -531,7 +535,10 @@ def build_choropleth(
             "locations": zip_strs,
             "z": zip_aggregates.values,
             "colorscale": colorscale,
-            "selectedpoints": selectedpoints
+            "selectedpoints": selectedpoints,
+            "colorbar": {"title": {
+                "text": colorbar_title, "side": "right", "font": {"size": 14}
+            }}
         }],
         "layout": {
             "mapbox": {
@@ -543,7 +550,7 @@ def build_choropleth(
                 'bearing': 0,
             },
             "uirevision": True,
-            "margin": {"r": 120, "t": 26, "l": 0, "b": 0},
+            "margin": {"r": 140, "t": 26, "l": 0, "b": 0},
             'template': template,
         }
     }
