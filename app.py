@@ -656,7 +656,15 @@ def build_updated_figures(
         selected_zips = None
 
     if selected_zips is not None:
-        df_map = df[array_module.isin(array_module.asarray(df['zip']), selected_zips)]
+        zips_array = array_module.asarray(df['zip'])
+
+        # Perform isin in fixed length chunks to limit memory usage
+        isin_mask = array_module.zeros(len(zips_array), dtype=np.bool)
+        stride = 32
+        for i in range(0, len(selected_zips), stride):
+            zips_chunk = selected_zips[i:i+stride]
+            isin_mask |= array_module.isin(zips_array, zips_chunk)
+        df_map = df[isin_mask]
     else:
         df_map = df
 
