@@ -17,7 +17,7 @@ Alternatively, set the `MAPBOX_TOKEN` environment variable to a valid mapbox tok
 To run the dashboard, create and activate a [conda](https://docs.conda.io/en/latest/) environment from the included `environment.yml` file: 
 ```
 $ conda env create -f environment.yml
-$ conda activate_rapids_mortgage_dashboard
+$ conda activate rapids_mortgage_dashboard
 ```
 
 Then launch the dashboard for development
