@@ -6,3 +6,7 @@
 /*.lock
 /*.dirlock
 /scheduler-info.json
+/dash_rapids_mortgage.egg-info/
+/notebooks/.ipynb_checkpoints/
+/notebooks/dask-worker-space/
+/work-dir/
