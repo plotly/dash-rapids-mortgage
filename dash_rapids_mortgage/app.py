@@ -329,6 +329,7 @@ app.layout = html.Div(children=[
     ),
 ])
 
+
 # Register callbacks
 @app.callback(
     [Output('aggregate-col-dropdown', 'options'),

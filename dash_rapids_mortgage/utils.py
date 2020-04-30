@@ -1,5 +1,5 @@
 from retrying import retry
-scheduler_url = "tcp://192.168.1.193:8786"
+scheduler_url = "localhost:8786"
 
 # Names of float columns
 float_columns = [
