@@ -17,13 +17,38 @@ from plotly.colors import sequential
 
 from dask import delayed
 from distributed import Client
-from dask_cuda import LocalCUDACluster
 
 import cudf
 import cupy
 
+from dash_rapids_mortgage.utils import (
+    scheduler_url, float_columns, compute_bounds, get_dataset
+)
+
+print("CUDA_VISIBLE_DEVICES=" + str(os.environ.get("CUDA_VISIBLE_DEVICES", None)))
+
 # Disable cupy memory pool so that cupy immediately releases GPU memory
 cupy.cuda.set_allocator(None)
+
+
+# Global initialization
+client = None
+bounds = None
+
+def init_client():
+    """
+    This function must be called before any of the functions that require a client.
+    """
+    global client, bounds
+    # Init client
+    print(f"Connecting to cluster at {scheduler_url} ... ", end='')
+    client = Client(scheduler_url)
+    print("done")
+
+    # Perform global operations that are expensive and require the client
+    c_df_d = get_dataset(client, 'c_df_d')
+    bounds = delayed(compute_bounds)(c_df_d, float_columns).compute()
+
 
 # Colors
 bgcolor = "#191a1a"  # mapbox dark map land color
@@ -61,53 +86,12 @@ valid_zip3s = {int(f['properties']['ZIP3']) for f in zip3_json["features"]}
 
 
 # Names of float columns
-float_columns = [
-    'current_actual_upb', 'dti', 'borrower_credit_score', 'delinquency_12_prediction'
-]
-
 column_labels = {
     'delinquency_12_prediction': 'Risk Score',
     'borrower_credit_score': 'Borrower Credit Score',
     'current_actual_upb': 'Unpaid Balance',
     'dti': 'Debt to Income Ratio',
 }
-
-
-def load_dataset(path):
-    """
-    Args:
-        path: Path to arrow file containing mortgage dataset
-
-    Returns:
-        pandas DataFrame
-    """
-    # Load dataset as pyarrow table
-    reader = pa.RecordBatchStreamReader(path)
-    pa_table = reader.read_all()
-
-    # Convert to pandas DataFrame
-    pd_df = pa_table.to_pandas()
-
-    # Convert zip to int16
-    pd_df['zip'] = pd_df['zip'].astype('int16')
-
-    # drop extra columns
-    pd_df.drop(['loan_id', 'seller_name'], axis=1, inplace=True)
-
-    return pd_df
-
-
-def compute_bounds(df, columns):
-    """
-    Compute the min/max bounds of select columns in a DataFrame
-    Args:
-        df: pandas or cudf DataFrame
-        columns: list of columns to compute bounds on
-
-    Returns:
-        dict from input columns to (min, max) tuples
-    """
-    return {c: (df[c].min(), df[c].max()) for c in columns}
 
 
 # Build Dash app and initial layout
@@ -131,6 +115,7 @@ def blank_fig(height):
 
 
 app = dash.Dash(__name__)
+
 app.layout = html.Div(children=[
     html.Div([
         html.H1(children=[
@@ -179,10 +164,6 @@ app.layout = html.Div(children=[
                             color='#00cc96',
                             id='gpu-toggle',
                         ))),
-                        html.Td(html.Button(
-                            "Reset GPU", id='reset-gpu', style={'width': '100%'}
-                        )),
-                        html.Div(id='reset-gpu-complete', style={'display': 'hidden'})
                     ]),
                     html.Tr([
                         html.Td(html.Div("Color by"), className="config-label"),
@@ -259,7 +240,7 @@ app.layout = html.Div(children=[
             html.Div(
                 children=[
                     html.H4([
-                        "Risk Score",
+                        "Risk SCORE",
                     ], className="container_title"),
                     dcc.Graph(
                         id='delinquency-histogram',
@@ -404,6 +385,47 @@ def clear_upb_hist_selection(*args):
 )
 def clear_delinquency_hist_selection(*args):
     return None
+
+
+@app.callback(
+    [Output('indicator-graph', 'figure'), Output('map-graph', 'figure'),
+     Output('dti-histogram', 'figure'), Output('credit-histogram', 'figure'),
+     Output('upb-histogram', 'figure'), Output('delinquency-histogram', 'figure')],
+    [Input('map-graph', 'selectedData'),
+     Input('dti-histogram', 'selectedData'), Input('credit-histogram', 'selectedData'),
+     Input('upb-histogram', 'selectedData'), Input('delinquency-histogram', 'selectedData'),
+     Input('aggregate-dropdown', 'value'), Input('aggregate-col-dropdown', 'value'),
+     Input('colorscale-dropdown', 'value'), Input('colorscale-transform-dropdown', 'value'),
+     Input('nbins-slider', 'value'), Input('gpu-toggle', 'on')
+     ]
+)
+def update_plots(
+        selected_map, selected_dti, selected_credit, selected_upb, selected_delinquency,
+        aggregate, aggregate_column, colorscale_name, transform, nbins, gpu_enabled
+):
+    t0 = time.time()
+
+    # Get delayed dataset from client
+    if gpu_enabled:
+        df_d = get_dataset(client, 'c_df_d')
+    else:
+        df_d = get_dataset(client, 'pd_df_d')
+
+    figures_d = delayed(build_updated_figures)(
+        df_d, selected_map, selected_dti, selected_credit, selected_upb,
+        selected_delinquency, aggregate, aggregate_column, colorscale_name,
+        transform, nbins, bounds)
+
+    figures = figures_d.compute()
+
+    (choropleth, credit_histogram, delinquency_histogram,
+     dti_histogram, n_selected_indicator, upb_histogram) = figures
+
+    print(f"Update time: {time.time() - t0}")
+    return (
+        n_selected_indicator, choropleth, dti_histogram, credit_histogram,
+        upb_histogram, delinquency_histogram
+    )
 
 
 # Query string helpers
@@ -719,138 +741,13 @@ def build_updated_figures(
             dti_histogram, n_selected_indicator, upb_histogram)
 
 
-def register_update_plots_callback(client, bounds):
-    """
-    Register Dash callback that updates all plots in response to selection events
-    Args:
-        df_d: Dask.delayed pandas or cudf DataFrame
-        bounds: Dictionary from columns to (min, max) tuples
-    """
-    @app.callback(
-        [Output('indicator-graph', 'figure'), Output('map-graph', 'figure'),
-         Output('dti-histogram', 'figure'), Output('credit-histogram', 'figure'),
-         Output('upb-histogram', 'figure'), Output('delinquency-histogram', 'figure')],
-        [Input('map-graph', 'selectedData'),
-         Input('dti-histogram', 'selectedData'), Input('credit-histogram', 'selectedData'),
-         Input('upb-histogram', 'selectedData'), Input('delinquency-histogram', 'selectedData'),
-         Input('aggregate-dropdown', 'value'), Input('aggregate-col-dropdown', 'value'),
-         Input('colorscale-dropdown', 'value'), Input('colorscale-transform-dropdown', 'value'),
-         Input('nbins-slider', 'value'), Input('gpu-toggle', 'on')
-         ]
-    )
-    def update_plots(
-            selected_map, selected_dti, selected_credit, selected_upb, selected_delinquency,
-            aggregate, aggregate_column, colorscale_name, transform, nbins, gpu_enabled
-    ):
-        t0 = time.time()
-
-        # Get delayed dataset from client
-        if gpu_enabled:
-            df_d = client.get_dataset('c_df_d')
-        else:
-            df_d = client.get_dataset('pd_df_d')
-
-        figures_d = delayed(build_updated_figures)(
-            df_d, selected_map, selected_dti, selected_credit, selected_upb,
-            selected_delinquency, aggregate, aggregate_column, colorscale_name,
-            transform, nbins, bounds)
-
-        figures = figures_d.compute()
-
-        (choropleth, credit_histogram, delinquency_histogram,
-         dti_histogram, n_selected_indicator, upb_histogram) = figures
-
-        print(f"Update time: {time.time() - t0}")
-        return (
-            n_selected_indicator, choropleth, dti_histogram, credit_histogram,
-            upb_histogram, delinquency_histogram
-        )
-
-
-def publish_dataset_to_cluster():
-    # Look for dataset
-    dataset_url = 'https://s3.us-east-2.amazonaws.com/rapidsai-data/viz-data/146M_predictions_v2.arrow.gz'
-
-    data_path = "./data/146M_predictions_v2.arrow"
-    if not os.path.exists(data_path):
-        print(f"Mortgage dataset not found at ./data/146M_predictions_v2.arrow.\n"
-              f"Downloading from {dataset_url}")
-        # Download dataset to data directory
-        os.makedirs('./data', exist_ok=True)
-        data_gz_path = data_path + '.gz'
-        with requests.get(dataset_url, stream=True) as r:
-            r.raise_for_status()
-            with open(data_gz_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-        print("Decompressing...")
-        with gzip.open(data_gz_path, 'rb') as f_in:
-            with open(data_path, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-
-        print("Deleting compressed file...")
-        os.remove(data_gz_path)
-
-        print('done!')
-    else:
-        print(f"Found dataset at {data_path}")
-
-    # Note: The creation of a Dask LocalCluster must happen inside the `__main__` block,
-    cluster = LocalCUDACluster(CUDA_VISIBLE_DEVICES="0")
-    client = Client(cluster)
-    print(f"Dask status: {cluster.dashboard_link}")
-
-    # Load dataset and persist dataset on cluster
-    def load_and_publish_dataset():
-        # pandas DataFrame
-        pd_df_d = delayed(load_dataset)(data_path).persist()
-
-        # cudf DataFrame
-        c_df_d = delayed(cudf.DataFrame.from_pandas)(pd_df_d).persist()
-
-        # Unpublish datasets if present
-        for ds_name in ['pd_df_d', 'c_df_d']:
-            if ds_name in client.datasets:
-                client.unpublish_dataset(ds_name)
-
-        # Publish datasets to the cluster
-        client.publish_dataset(pd_df_d=pd_df_d)
-        client.publish_dataset(c_df_d=c_df_d)
-
-    load_and_publish_dataset()
-
-    # Precompute field bounds
-    c_df_d = client.get_dataset('c_df_d')
-    bounds = delayed(compute_bounds)(c_df_d, float_columns).compute()
-
-    # Define callback to restart cluster and reload datasets
-    @app.callback(
-        Output('reset-gpu-complete', 'children'),
-        [Input('reset-gpu', 'n_clicks')]
-    )
-    def restart_cluster(n_clicks):
-        if n_clicks:
-            print("Restarting LocalCUDACluster")
-            client.unpublish_dataset('pd_df_d')
-            client.unpublish_dataset('c_df_d')
-            client.restart()
-            load_and_publish_dataset()
-
-    # Register top-level callback that updates plots
-    register_update_plots_callback(client, bounds)
-
-
-def server():
-    # gunicorn entry point when called with `gunicorn 'app:server()'`
-    publish_dataset_to_cluster()
+# gunicorn entry point
+def get_server():
+    init_client()
     return app.server
 
 
 if __name__ == '__main__':
     # development entry point
-    publish_dataset_to_cluster()
-
-    # Launch dashboard
-    app.run_server(debug=False, dev_tools_silence_routes_logging=True)
+    init_client()
+    app.run_server(debug=True)
